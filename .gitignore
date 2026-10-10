@@ -132,7 +132,7 @@ dist
 .pnp.*
 .yarn/*
 !.yarn/patches
-!.yarn/plugins
+!.yarn/plugin
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
