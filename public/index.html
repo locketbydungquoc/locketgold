@@ -770,25 +770,13 @@ h1.hero-title .grad{background-image:linear-gradient(110deg,#fff 5%,#fff0ad 28%,
 
 <script>
 // ═══════════════════════════════════════════════
-// PAYMENT CONFIG — sửa theo shop của bạn
+// UI helpers (giữ nguyên, không đổi)
 // ═══════════════════════════════════════════════
-const PAYMENT_CONFIG = {
-  bankName: 'MB Bank',
-  bankAcc: '0123456789',
-  bankHolder: 'NGUYEN VAN A',
-  bankBin: '970422',
-  checkEndpoint: '/api/payment/check',
-  activateEndpoint: '/api/activate',
-};
-
 const state = {
   p3:  { username:'', memo:'', pollTimer:null },
   p15: { username:'', memo:'', pollTimer:null },
 };
 
-// ═══════════════════════════════════════════════
-// UI helpers
-// ═══════════════════════════════════════════════
 function openModal(id){
   const el = document.getElementById('modal-'+id);
   if(!el) return;
@@ -808,13 +796,10 @@ function closeModal(id){
     if(inp) inp.value = '';
   },280);
 }
-
-// FLOW MỚI: input → payment → processing → success
 const SCREENS = {
   p3:  ['input','payment','processing','success'],
   p15: ['input','payment','processing','success'],
 };
-
 function showScreen(id, screen){
   (SCREENS[id]||[]).forEach(s=>{
     const el = document.getElementById(id+'-screen-'+s);
@@ -823,7 +808,6 @@ function showScreen(id, screen){
   const sheet = document.querySelector('#modal-'+id+' .sheet');
   if(sheet) sheet.scrollTop = 0;
 }
-
 function copyText(el){
   const text = el.textContent.trim();
   if(!text || text==='—') return;
@@ -833,12 +817,6 @@ function copyText(el){
     setTimeout(()=>el.textContent = old, 1300);
   });
 }
-
-function genMemo(pkg){
-  const rand = Math.random().toString(36).slice(2,8).toUpperCase();
-  return 'LK' + (pkg==='p3'?'3':'15') + rand;
-}
-
 function switchTab(prefix, name){
   document.querySelectorAll('#modal-'+prefix+' .tab').forEach(t=>{
     t.classList.toggle('active', t.dataset.tab===name);
@@ -847,7 +825,6 @@ function switchTab(prefix, name){
     c.classList.toggle('active', c.id===prefix+'-tab-'+name);
   });
 }
-
 function shake(el){
   el.focus();
   el.style.borderColor = 'rgba(244,63,94,.7)';
@@ -856,129 +833,183 @@ function shake(el){
 }
 
 // ═══════════════════════════════════════════════
-// PACK 3S
+// API CALLS — gọi backend thật
 // ═══════════════════════════════════════════════
-function p3ToPayment(){
+
+// Tạo đơn hàng → nhận memo + QR + bank info thật
+async function createOrder(username, pkg) {
+  const res = await fetch('/api/orders', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, package: pkg }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'create_order_failed');
+  }
+  return await res.json();
+}
+
+// Kiểm tra đã thanh toán chưa
+async function checkPayment(memo) {
+  const res = await fetch(`/api/payment/check?memo=${encodeURIComponent(memo)}`, {
+    cache: 'no-store',
+  });
+  if (!res.ok) return { paid: false };
+  return await res.json();
+}
+
+// Kích hoạt Gold
+async function activateOrder(username, pkg, memo) {
+  const res = await fetch('/api/activate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, package: pkg, memo }),
+  });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok && data.ok !== false, ...data };
+}
+
+// ═══════════════════════════════════════════════
+// PACK 3S — input → payment → processing → success
+// ═══════════════════════════════════════════════
+async function p3ToPayment(){
   const input = document.getElementById('p3-username');
   const username = (input.value||'').trim().replace(/^@+/,'');
   if(!username || username.length<3){ shake(input); return; }
+
   state.p3.username = username;
-  state.p3.memo = genMemo('p3');
-  renderPayment('p3', 30000, state.p3.memo);
+  showScreen('p3','processing');
+
+  let order;
+  try {
+    order = await createOrder(username, 'p3');
+  } catch (e) {
+    showScreen('p3','input');
+    alert('Không tạo được đơn hàng. Kiểm tra kết nối và thử lại.');
+    return;
+  }
+
+  state.p3.memo = order.memo;
+  renderPayment('p3', order);
   showScreen('p3','payment');
   startPolling('p3');
 }
 
 // ═══════════════════════════════════════════════
-// PACK 15S — flow mới: input → payment → processing → success
+// PACK 15S — input → payment → processing → success
 // ═══════════════════════════════════════════════
-function p15ToPayment(){
+async function p15ToPayment(){
   const input = document.getElementById('p15-username');
   const username = (input.value||'').trim().replace(/^@+/,'');
   if(!username || username.length<3){ shake(input); return; }
+
   state.p15.username = username;
-  state.p15.memo = genMemo('p15');
-  renderPayment('p15', 40000, state.p15.memo);
+  showScreen('p15','processing');
+
+  let order;
+  try {
+    order = await createOrder(username, 'p15');
+  } catch (e) {
+    showScreen('p15','input');
+    alert('Không tạo được đơn hàng. Kiểm tra kết nối và thử lại.');
+    return;
+  }
+
+  state.p15.memo = order.memo;
+  renderPayment('p15', order);
   showScreen('p15','payment');
   startPolling('p15');
 }
 
 // ═══════════════════════════════════════════════
-// PAYMENT
+// RENDER PAYMENT SCREEN
 // ═══════════════════════════════════════════════
-function renderPayment(pkg, amount, memo){
-  const qr = `https://img.vietqr.io/image/${PAYMENT_CONFIG.bankBin}-${PAYMENT_CONFIG.bankAcc}-compact2.png`
-           + `?amount=${amount}&addInfo=${encodeURIComponent(memo)}&accountName=${encodeURIComponent(PAYMENT_CONFIG.bankHolder)}`;
-  document.getElementById(pkg+'-qr').src = qr;
-  document.getElementById(pkg+'-bank-name').textContent = PAYMENT_CONFIG.bankName;
-  document.getElementById(pkg+'-bank-acc').textContent = PAYMENT_CONFIG.bankAcc;
-  document.getElementById(pkg+'-bank-holder').textContent = PAYMENT_CONFIG.bankHolder;
-  document.getElementById(pkg+'-bank-amount').textContent = amount.toLocaleString('vi-VN')+'đ';
-  document.getElementById(pkg+'-bank-memo').textContent = memo;
+function renderPayment(pkg, order) {
+  document.getElementById(pkg+'-qr').src = order.qr;
+  document.getElementById(pkg+'-bank-name').textContent = order.bank.holder
+    ? order.bank.holder.split(' ').slice(-1)[0]  // chỉ hiện tên cuối làm "bank name" — hoặc dùng order.bank.name nếu backend trả
+    : '—';
+  document.getElementById(pkg+'-bank-acc').textContent = order.bank.acc;
+  document.getElementById(pkg+'-bank-holder').textContent = order.bank.holder;
+  document.getElementById(pkg+'-bank-amount').textContent = order.amount.toLocaleString('vi-VN')+'đ';
+  document.getElementById(pkg+'-bank-memo').textContent = order.memo;
+
   const w = document.getElementById(pkg+'-pay-watch');
   w.className = 'pay-watch';
   document.getElementById(pkg+'-pay-msg').textContent = 'Đang chờ xác nhận thanh toán...';
 }
 
-function startPolling(pkg){
+// ═══════════════════════════════════════════════
+// POLLING — 3s/lần gọi /api/payment/check
+// ═══════════════════════════════════════════════
+function startPolling(pkg) {
   stopPolling(pkg);
-  const amount = pkg==='p3' ? 30000 : 40000;
-  state[pkg].pollTimer = setInterval(async ()=>{
-    try{
-      const url = `${PAYMENT_CONFIG.checkEndpoint}?memo=${encodeURIComponent(state[pkg].memo)}&amount=${amount}`;
-      const res = await fetch(url,{cache:'no-store'});
-      const data = await res.json();
-      if(data && data.paid){ stopPolling(pkg); onPaid(pkg); }
-    }catch(e){}
+  state[pkg].pollTimer = setInterval(async () => {
+    try {
+      const data = await checkPayment(state[pkg].memo);
+      if (data && data.paid) {
+        stopPolling(pkg);
+        onPaid(pkg);
+      }
+    } catch (e) { /* im lặng, thử lại lần sau */ }
   }, 3000);
 }
-function stopPolling(pkg){
-  if(state[pkg].pollTimer){ clearInterval(state[pkg].pollTimer); state[pkg].pollTimer = null; }
+function stopPolling(pkg) {
+  if (state[pkg].pollTimer) {
+    clearInterval(state[pkg].pollTimer);
+    state[pkg].pollTimer = null;
+  }
 }
-function cancelPayment(pkg, silent){
+function cancelPayment(pkg, silent) {
   stopPolling(pkg);
   state[pkg].memo = '';
-  if(!silent) showScreen(pkg, 'input');
+  if (!silent) showScreen(pkg, 'input');
 }
 
 // ═══════════════════════════════════════════════
-// ON PAID → processing → activate → success
+// ON PAID — kích hoạt Gold
 // ═══════════════════════════════════════════════
-async function onPaid(pkg){
+async function onPaid(pkg) {
   const w = document.getElementById(pkg+'-pay-watch');
   w.classList.add('paid');
   document.getElementById(pkg+'-pay-msg').textContent = 'Đã nhận thanh toán';
-  await new Promise(r=>setTimeout(r,700));
-  showScreen(pkg,'processing');
 
-  const result = await activateLocket(state[pkg].username, pkg, state[pkg].memo);
-  if(result.ok){
-    document.getElementById(pkg+'-success-user').textContent = '@'+state[pkg].username;
-    showScreen(pkg,'success');
+  await new Promise(r => setTimeout(r, 700));
+  showScreen(pkg, 'processing');
+
+  const result = await activateOrder(state[pkg].username, pkg, state[pkg].memo);
+
+  if (result.ok) {
+    document.getElementById(pkg+'-success-user').textContent = '@' + state[pkg].username;
+    showScreen(pkg, 'success');
   } else {
-    showScreen(pkg,'payment');
+    showScreen(pkg, 'payment');
     const w2 = document.getElementById(pkg+'-pay-watch');
     w2.className = 'pay-watch';
-    document.getElementById(pkg+'-pay-msg').textContent = result.msg || 'Kích hoạt lỗi — liên hệ shop kèm mã '+state[pkg].memo;
+    document.getElementById(pkg+'-pay-msg').textContent =
+      result.msg || result.error || 'Kích hoạt lỗi — liên hệ shop kèm mã ' + state[pkg].memo;
   }
-}
-
-// ═══════════════════════════════════════════════
-// BACKEND HOOK — kích hoạt Gold qua username
-// ═══════════════════════════════════════════════
-async function activateLocket(username, pkg, memo){
-  // MOCK — xoá khi nối backend thật
-  await new Promise(r=>setTimeout(r,2200));
-  if(!username || username.length<3) return { ok:false, msg:'Username không hợp lệ.' };
-  return { ok:true };
-
-  // THẬT:
-  // const res = await fetch(PAYMENT_CONFIG.activateEndpoint, {
-  //   method:'POST',
-  //   headers:{'Content-Type':'application/json'},
-  //   body: JSON.stringify({ username, package: pkg, memo })
-  // });
-  // return await res.json();
 }
 
 // ═══════════════════════════════════════════════
 // ENTER submit
 // ═══════════════════════════════════════════════
-document.addEventListener('keydown', e=>{
-  if(e.key!=='Enter') return;
-  const p3in = document.getElementById('p3-screen-input');
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  const p3in  = document.getElementById('p3-screen-input');
   const p15in = document.getElementById('p15-screen-input');
-  if(document.getElementById('modal-p3').classList.contains('show') && p3in.style.display!=='none') p3ToPayment();
-  if(document.getElementById('modal-p15').classList.contains('show') && p15in.style.display!=='none') p15ToPayment();
+  if (document.getElementById('modal-p3').classList.contains('show') && p3in.style.display !== 'none') p3ToPayment();
+  if (document.getElementById('modal-p15').classList.contains('show') && p15in.style.display !== 'none') p15ToPayment();
 });
 
 // ═══════════════════════════════════════════════
-// Platform autodetect cho tab iOS/Android trong success gói 15s
+// Platform autodetect cho tab iOS/Android
 // ═══════════════════════════════════════════════
 (function(){
-  if(/Android/i.test(navigator.userAgent)){
+  if (/Android/i.test(navigator.userAgent)) {
     const t = document.querySelector('#modal-p15 .tab[data-tab="android"]');
-    if(t) t.click();
+    if (t) t.click();
   }
 })();
 </script>
