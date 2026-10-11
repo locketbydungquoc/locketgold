@@ -1,23 +1,18 @@
-// api/debug.js — tạm thời, xoá sau khi debug xong
+// api/debug.js — tạm thời
 import { sql, json } from './_db.js';
 
 export default async function handler(req, res) {
-  const url = process.env.DATABASE_URL || '';
-  const host = url.replace(/.*@/, '').replace(/\/.*/, '');
-  const pw = url.match(/:\/\/[^:]+:([^@]+)@/)?.[1] || '';
-
-  let db_check = 'not tested';
-  try {
-    const rows = await sql`SELECT COUNT(*)::int as cnt FROM orders`;
-    db_check = `orders table exists, count=${rows[0].cnt}`;
-  } catch (e) {
-    db_check = `ERROR: ${e.message}`;
-  }
-
+  const rows = await sql`
+    SELECT memo, username, package, status FROM orders
+    ORDER BY created_at DESC
+    LIMIT 10
+  `;
+  const exact = await sql`
+    SELECT memo, status FROM orders WHERE memo = 'LK3CWC1V' LIMIT 1
+  `;
   return json(res, 200, {
-    host,
-    pw_tail: pw.slice(-6),
-    url_len: url.length,
-    db_check,
+    all_orders: rows,
+    exact_match: exact,
+    memo_tested: 'LK3CWC1V',
   });
 }
